@@ -1,0 +1,10 @@
+{
+	"user_db": {
+		"Host"     : "dev-mysql.com",
+		"User"     : "",
+		"Password" : "",
+		"DbName"   : "user_db",
+		"Port"     : 3306,
+		"Charset"  : "utf8"
+	}
+}

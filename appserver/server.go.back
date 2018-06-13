@@ -1,0 +1,137 @@
+package easyserver
+
+import (
+	. "net/http"
+	"reflect"
+	"strings"
+	"easy-go/library"
+)
+
+//var filter = &filter.Filter{}
+//var filterInvoke = reflect.ValueOf(filter)
+
+type middlewareHandler struct {
+	Generic           bool
+	DynamicMiddleware reflect.Value
+	GenericMiddleware GenericMiddleware
+}
+
+var emptyInterfaceType = reflect.TypeOf((*interface{})(nil)).Elem()
+
+type GenericMiddleware func(ResponseWriter, *Request, NextMiddlewareFunc)
+
+type NextMiddlewareFunc func(ResponseWriter, *Request)
+
+type AppServer struct {
+	Server
+}
+
+type AppServeMux struct {
+	ServeMux
+	middleware  []*middlewareHandler
+	contextType reflect.Type
+}
+
+func NewAppServeMux() *AppServeMux {
+	return new(AppServeMux)
+}
+
+// Middleware adds the specified middleware tot he router and returns the router.
+func (mux *AppServeMux) Middleware(fn interface{}) *AppServeMux {
+	vfn := reflect.ValueOf(fn)
+	validateMiddleware(vfn, mux.contextType)
+	if vfn.Type().NumIn() == 3 {
+		mux.middleware = append(mux.middleware, &middlewareHandler{Generic: true, GenericMiddleware: fn.(func(ResponseWriter, *Request, NextMiddlewareFunc))})
+	} else {
+		mux.middleware = append(mux.middleware, &middlewareHandler{Generic: false, DynamicMiddleware: vfn})
+	}
+	return mux
+}
+
+func (mux *AppServeMux) AppHandleFunc(pattern string, handler func(ResponseWriter, *Request)) {
+	middlewareLen := len(mux.middleware)
+	for i := 0; i < middlewareLen; i++ {
+		meddle := mux.middleware[i].GenericMiddleware
+		library.FmtPrint("----------x------------", reflect.TypeOf(meddle).)
+	}
+	mux.HandleFunc(pattern, handler)
+}
+
+func validateMiddleware(vfn reflect.Value, ctxType reflect.Type) {
+	var req *Request
+	var resp func() ResponseWriter
+	var n NextMiddlewareFunc
+	if !isValidHandler(vfn, ctxType, reflect.TypeOf(resp).Out(0), reflect.TypeOf(req), reflect.TypeOf(n)) {
+		panic(instructiveMessage(vfn, "middleware", "middleware", "rw web.ResponseWriter, req *web.Request, next web.NextMiddlewareFunc", ctxType))
+	}
+}
+
+// Ensures vfn is a function, that optionally takes a *ctxType as the first argument, followed by the specified types. Handlers have no return value.
+// Returns true if valid, false otherwise.
+func isValidHandler(vfn reflect.Value, ctxType reflect.Type, types ...reflect.Type) bool {
+	fnType := vfn.Type()
+
+	if fnType.Kind() != reflect.Func {
+		return false
+	}
+
+	typesStartIdx := 0
+	typesLen := len(types)
+	numIn := fnType.NumIn()
+	numOut := fnType.NumOut()
+
+	if numOut != 0 {
+		return false
+	}
+
+	if numIn == typesLen {
+		// No context
+	} else if numIn == (typesLen + 1) {
+		// context, types
+		firstArgType := fnType.In(0)
+		if firstArgType != reflect.PtrTo(ctxType) && firstArgType != emptyInterfaceType {
+			return false
+		}
+		typesStartIdx = 1
+	} else {
+		return false
+	}
+
+	for _, typeArg := range types {
+		if fnType.In(typesStartIdx) != typeArg {
+			return false
+		}
+		typesStartIdx++
+	}
+
+	return true
+}
+
+func instructiveMessage(vfn reflect.Value, addingType string, yourType string, args string, ctxType reflect.Type) string {
+	// Get context type without package.
+	ctxString := ctxType.String()
+	splitted := strings.Split(ctxString, ".")
+	if len(splitted) <= 1 {
+		ctxString = splitted[0]
+	} else {
+		ctxString = splitted[1]
+	}
+
+	str := "\n" + strings.Repeat("*", 120) + "\n"
+	str += "* You are adding " + addingType + " to a router with context type '" + ctxString + "'\n"
+	str += "*\n*\n"
+	str += "* Your " + yourType + " function can have one of these signatures:\n"
+	str += "*\n"
+	str += "* // If you don't need context:\n"
+	str += "* func YourFunctionName(" + args + ")\n"
+	str += "*\n"
+	str += "* // If you want your " + yourType + " to accept a context:\n"
+	str += "* func (c *" + ctxString + ") YourFunctionName(" + args + ")  // or,\n"
+	str += "* func YourFunctionName(c *" + ctxString + ", " + args + ")\n"
+	str += "*\n"
+	str += "* Unfortunately, your function has this signature: " + vfn.Type().String() + "\n"
+	str += "*\n"
+	str += strings.Repeat("*", 120) + "\n"
+
+	return str
+}
